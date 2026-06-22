@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Logs
+*.log
+nohup.out
+
+# Checkpoints downloaded from HF (not tracked)
+checkpoints/encoder_qc/
+
+# HF cache
+.cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.venv/
+venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
