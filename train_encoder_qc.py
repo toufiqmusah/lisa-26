@@ -31,6 +31,11 @@ def collate_3d(batch):
     return images, labels
 
 
+def collate_3d_pred(batch):
+    images = torch.stack([b[0] for b in batch])
+    return images
+
+
 def train(args):
     torch.manual_seed(RANDOM_SEED)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -140,13 +145,13 @@ def predict(args):
     print("Loaded encoder QC model")
 
     dataset = QCImageDataset(root=DATA_ROOT, split="val")
-    loader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=collate_3d)
+    loader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=collate_3d_pred)
 
     import pandas as pd
 
     rows = []
     with torch.no_grad():
-        for i, (images, _) in enumerate(loader):
+        for i, images in enumerate(loader):
             images = images.to(device)
             logits = model(images)
             preds = logits.argmax(dim=-1).squeeze(0).cpu().numpy().tolist()
