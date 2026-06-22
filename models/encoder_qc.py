@@ -4,7 +4,7 @@ from typing import Optional
 import torch
 from torch import nn
 
-from config import QC_LABELS, N_QC_CLASSES, QC_HEAD_HIDDEN, QC_HEAD_DROPOUT, CROP_SIZE, ensure_encoder_checkpoint
+from config import QC_LABELS, N_QC_CLASSES, QC_HEAD_HIDDEN, QC_HEAD_DROPOUT, CROP_SIZE, FINETUNE_N_BLOCKS, FINETUNE_LR, ensure_encoder_checkpoint
 
 
 class QCHead(nn.Module):
@@ -13,11 +13,11 @@ class QCHead(nn.Module):
         h = QC_HEAD_HIDDEN
         self.net = nn.Sequential(
             nn.Linear(in_features, h[0]),
-            nn.BatchNorm1d(h[0]),
+            nn.LayerNorm(h[0]),
             nn.LeakyReLU(inplace=True),
             nn.Dropout(QC_HEAD_DROPOUT),
             nn.Linear(h[0], h[1]),
-            nn.BatchNorm1d(h[1]),
+            nn.LayerNorm(h[1]),
             nn.LeakyReLU(inplace=True),
             nn.Dropout(QC_HEAD_DROPOUT),
         )
@@ -40,6 +40,7 @@ class EncoderQC(nn.Module):
         self,
         checkpoint_path: Optional[Path] = None,
         freeze_encoder: bool = False,
+        n_unfreeze_blocks: int = 0,
     ):
         super().__init__()
 
@@ -69,16 +70,21 @@ class EncoderQC(nn.Module):
         else:
             print("Checkpoint not found, using random init")
 
-        self.backbone.eval() if freeze_encoder else self.backbone.train()
-
         embed_dim = self.backbone.eva.embed_dim
         self.qc_head = QCHead(in_features=embed_dim)
 
-        self._freeze_encoder = freeze_encoder
         if freeze_encoder:
             for p in self.backbone.parameters():
                 p.requires_grad_(False)
-            print("Encoder frozen")
+            if n_unfreeze_blocks > 0:
+                for b in self.backbone.eva.blocks[-n_unfreeze_blocks:]:
+                    for p in b.parameters():
+                        p.requires_grad_(True)
+                print(f"Unfrozen last {n_unfreeze_blocks} eva blocks")
+            else:
+                print("Encoder frozen")
+        else:
+            print("Encoder trainable (all params)")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.backbone.down_projection(x)

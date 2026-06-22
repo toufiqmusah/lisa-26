@@ -92,6 +92,11 @@ QC_HEAD_WEIGHT_DECAY = 1e-5
 QC_HEAD_BATCH_SIZE = 2
 QC_HEAD_EPOCHS = 25
 QC_HEAD_PATIENCE = 10
+
+# Finetune: unfreeze last N encoder blocks with separate LR
+FINETUNE_N_BLOCKS = 4
+FINETUNE_LR = 1e-6
+
 CROP_SIZE = (112, 160, 128)
 
 # --- Ensemble ---

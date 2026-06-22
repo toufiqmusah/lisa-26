@@ -17,6 +17,8 @@ from config import (
     CHECKPOINT_DIR,
     RANDOM_SEED,
     TEST_SIZE,
+    FINETUNE_N_BLOCKS,
+    FINETUNE_LR,
 )
 from data.task1a import QCImageDataset
 from models.encoder_qc import EncoderQC
@@ -50,15 +52,28 @@ def train(args):
     print(f"Train: {n_train}, Val: {n_val}")
 
     ckpt_path = Path(args.checkpoint) if args.checkpoint else None
-    model = EncoderQC(checkpoint_path=ckpt_path, freeze_encoder=True)
+    model = EncoderQC(
+        checkpoint_path=ckpt_path,
+        freeze_encoder=True,
+        n_unfreeze_blocks=FINETUNE_N_BLOCKS,
+    )
     model.to(device)
 
     n_enc = sum(p.numel() for p in model.backbone.parameters() if p.requires_grad)
     n_head = sum(p.numel() for p in model.qc_head.parameters())
     print(f"Trainable: encoder={n_enc:,}, head={n_head:,}")
 
+    param_groups = [
+        {"params": model.qc_head.parameters(), "lr": QC_HEAD_LR},
+    ]
+    if n_enc > 0:
+        param_groups.append({
+            "params": [p for p in model.backbone.parameters() if p.requires_grad],
+            "lr": FINETUNE_LR,
+        })
+
     optimizer = optim.AdamW(
-        model.qc_head.parameters(),
+        param_groups,
         lr=QC_HEAD_LR,
         weight_decay=QC_HEAD_WEIGHT_DECAY,
     )
