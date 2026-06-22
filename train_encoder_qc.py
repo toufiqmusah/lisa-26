@@ -9,6 +9,7 @@ import numpy as np
 from config import (
     DATA_ROOT,
     QC_LABELS,
+    N_QC_CLASSES,
     QC_HEAD_LR,
     QC_HEAD_WEIGHT_DECAY,
     QC_HEAD_BATCH_SIZE,
@@ -21,7 +22,7 @@ from config import (
     FINETUNE_LR,
 )
 from data.task1a import QCImageDataset
-from models.encoder_qc import EncoderQC
+from models.encoder_qc import EncoderQC, Conv3DQC
 
 
 def collate_3d(batch):
@@ -46,6 +47,15 @@ def train(args):
     n_train = len(full_dataset) - n_val
     train_ds, val_ds = random_split(full_dataset, [n_train, n_val])
 
+    # Per-label class weights (inverse frequency, clipped)
+    label_arr = np.array([full_dataset[i][1] for i in range(len(full_dataset))])
+    criteria = []
+    for i in range(len(QC_LABELS)):
+        counts = np.bincount(label_arr[:, i].astype(int), minlength=N_QC_CLASSES)
+        weights = len(label_arr) / (N_QC_CLASSES * counts.astype(float))
+        weights = np.clip(weights, None, 10.0)
+        criteria.append(nn.CrossEntropyLoss(weight=torch.tensor(weights, dtype=torch.float32).to(device)))
+
     train_loader = DataLoader(
         train_ds, batch_size=QC_HEAD_BATCH_SIZE, shuffle=True,
         collate_fn=collate_3d, num_workers=2, pin_memory=True,
@@ -56,33 +66,41 @@ def train(args):
     )
     print(f"Train: {n_train}, Val: {n_val}")
 
-    ckpt_path = Path(args.checkpoint) if args.checkpoint else None
-    model = EncoderQC(
-        checkpoint_path=ckpt_path,
-        freeze_encoder=True,
-        n_unfreeze_blocks=FINETUNE_N_BLOCKS,
-    )
-    model.to(device)
+    if args.backbone == "conv3d":
+        model = Conv3DQC()
+        model.to(device)
+        n_total = sum(p.numel() for p in model.parameters())
+        print(f"Conv3D QC model — total params: {n_total:,} (all trainable)")
+        param_groups = [
+            {"params": model.parameters(), "lr": QC_HEAD_LR},
+        ]
+    else:
+        ckpt_path = Path(args.checkpoint) if args.checkpoint else None
+        model = EncoderQC(
+            checkpoint_path=ckpt_path,
+            freeze_encoder=True,
+            n_unfreeze_blocks=FINETUNE_N_BLOCKS,
+        )
+        model.to(device)
 
-    n_enc = sum(p.numel() for p in model.backbone.parameters() if p.requires_grad)
-    n_head = sum(p.numel() for p in model.qc_head.parameters())
-    print(f"Trainable: encoder={n_enc:,}, head={n_head:,}")
+        n_enc = sum(p.numel() for p in model.backbone.parameters() if p.requires_grad)
+        n_head = sum(p.numel() for p in model.qc_head.parameters())
+        print(f"Trainable: encoder={n_enc:,}, head={n_head:,}")
 
-    param_groups = [
-        {"params": model.qc_head.parameters(), "lr": QC_HEAD_LR},
-    ]
-    if n_enc > 0:
-        param_groups.append({
-            "params": [p for p in model.backbone.parameters() if p.requires_grad],
-            "lr": FINETUNE_LR,
-        })
+        param_groups = [
+            {"params": model.qc_head.parameters(), "lr": QC_HEAD_LR},
+        ]
+        if n_enc > 0:
+            param_groups.append({
+                "params": [p for p in model.backbone.parameters() if p.requires_grad],
+                "lr": FINETUNE_LR,
+            })
 
     optimizer = optim.AdamW(
         param_groups,
         lr=QC_HEAD_LR,
         weight_decay=QC_HEAD_WEIGHT_DECAY,
     )
-    criterion = nn.CrossEntropyLoss()
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=QC_HEAD_EPOCHS)
 
     best_val_loss = float("inf")
@@ -96,7 +114,7 @@ def train(args):
         for images, labels in train_loader:
             images, labels = images.to(device), labels.to(device)
             logits = model(images)
-            loss = sum(criterion(logits[:, i], labels[:, i]) for i in range(len(QC_LABELS)))
+            loss = sum(criteria[i](logits[:, i], labels[:, i]) for i in range(len(QC_LABELS)))
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -108,7 +126,7 @@ def train(args):
             for images, labels in val_loader:
                 images, labels = images.to(device), labels.to(device)
                 logits = model(images)
-                loss = sum(criterion(logits[:, i], labels[:, i]) for i in range(len(QC_LABELS)))
+                loss = sum(criteria[i](logits[:, i], labels[:, i]) for i in range(len(QC_LABELS)))
                 val_loss += loss.item()
 
         train_loss /= len(train_loader)
@@ -119,7 +137,8 @@ def train(args):
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            torch.save(model.state_dict(), save_dir / "best.pt")
+            suffix = "_conv3d" if args.backbone == "conv3d" else ""
+            torch.save(model.state_dict(), save_dir / f"best{suffix}.pt")
             patience_counter = 0
             print("  (saved)")
         else:
@@ -136,13 +155,20 @@ def train(args):
 def predict(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    ckpt_path = Path(args.checkpoint) if args.checkpoint else None
-    model = EncoderQC(checkpoint_path=ckpt_path, freeze_encoder=True)
-    state = torch.load(CHECKPOINT_DIR / "encoder_qc" / "best.pt", map_location="cpu")
-    model.load_state_dict(state, strict=False)
+    suffix = "_conv3d" if args.backbone == "conv3d" else ""
+    ckpt_path = CHECKPOINT_DIR / "encoder_qc" / f"best{suffix}.pt"
+
+    if args.backbone == "conv3d":
+        model = Conv3DQC()
+    else:
+        enc_ckpt = Path(args.checkpoint) if args.checkpoint else None
+        model = EncoderQC(checkpoint_path=enc_ckpt, freeze_encoder=True)
+
+    state = torch.load(ckpt_path, map_location="cpu")
+    model.load_state_dict(state, strict=args.backbone == "conv3d")
     model.to(device)
     model.eval()
-    print("Loaded encoder QC model")
+    print(f"Loaded encoder QC model ({args.backbone})")
 
     dataset = QCImageDataset(root=DATA_ROOT, split="val")
     loader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=collate_3d_pred)
@@ -165,7 +191,9 @@ def predict(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["train", "predict"])
-    parser.add_argument("--checkpoint", default=None, help="Path to Task 2 PrimusV3S checkpoint")
+    parser.add_argument("--backbone", choices=["primus", "conv3d"], default="primus",
+                        help="primus=frozen EVA+head (needs checkpoint), conv3d=fully trainable 3D ConvNet")
+    parser.add_argument("--checkpoint", default=None, help="Path to Task 2 PrimusV3S checkpoint (primus only)")
     parser.add_argument("--gpu", type=int, default=0)
     args = parser.parse_args()
 

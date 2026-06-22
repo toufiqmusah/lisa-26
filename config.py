@@ -108,17 +108,24 @@ ENCODER_REQUIRED_IMPORTS = ("conv_op", "norm_op", "nonlin", "block")
 
 QC_HEAD_HIDDEN = [256, 128]
 QC_HEAD_DROPOUT = 0.3
-QC_HEAD_LR = 1e-4
+QC_HEAD_LR = 3e-4
 QC_HEAD_WEIGHT_DECAY = 1e-5
 QC_HEAD_BATCH_SIZE = 2
-QC_HEAD_EPOCHS = 25
-QC_HEAD_PATIENCE = 10
+QC_HEAD_EPOCHS = 50
+QC_HEAD_PATIENCE = 12
 
 # Finetune: unfreeze last N encoder blocks with separate LR
 FINETUNE_N_BLOCKS = 4
 FINETUNE_LR = 1e-6
 
 CROP_SIZE = (112, 160, 128)
+
+# --- Conv3D backbone (fully trainable residual encoder) ---
+CONV3D_N_STAGES = 4
+CONV3D_FEATURES = (32, 64, 128, 256)
+CONV3D_KERNEL_SIZES = 3
+CONV3D_STRIDES = (1, 2, 2, 2)
+CONV3D_N_BLOCKS = (1, 2, 2, 2)
 
 # --- Ensemble ---
 ENSEMBLE_WEIGHTS = {"radiomics": 0.3, "encoder_qc": 0.7}

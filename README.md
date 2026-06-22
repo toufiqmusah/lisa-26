@@ -46,10 +46,20 @@ python3 predict.py radiomics
 ```
 
 Encoder QC (requires GPU):
+
+Two backbones available:
+- `primus` (default): Frozen PrimusV3S (300M params) + trainable QC head. Needs the Task 2 checkpoint.
+- `conv3d`: Fully trainable 3D residual ConvNet (8.3M params). No pretrained checkpoint needed.
+
 ```bash
-python3 train_encoder_qc.py train
-python3 train_encoder_qc.py predict
+# Primus backbone (frozen EVA + head)
+python3 train_encoder_qc.py train --backbone primus --checkpoint /path/to/checkpoint_best.pth
+python3 train_encoder_qc.py predict --backbone primus
 python3 predict.py ensemble
+
+# Conv3D backbone (fully trainable, recommended)
+python3 train_encoder_qc.py train --backbone conv3d
+python3 train_encoder_qc.py predict --backbone conv3d
 ```
 
 ## Task 1b — Enhancement (already submitted)

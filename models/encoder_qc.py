@@ -4,7 +4,7 @@ from typing import Optional
 import torch
 from torch import nn
 
-from config import QC_LABELS, N_QC_CLASSES, QC_HEAD_HIDDEN, QC_HEAD_DROPOUT, CROP_SIZE, FINETUNE_N_BLOCKS, FINETUNE_LR, ensure_encoder_checkpoint
+from config import QC_LABELS, N_QC_CLASSES, QC_HEAD_HIDDEN, QC_HEAD_DROPOUT, CROP_SIZE, FINETUNE_N_BLOCKS, FINETUNE_LR, ensure_encoder_checkpoint, CONV3D_N_STAGES, CONV3D_FEATURES, CONV3D_KERNEL_SIZES, CONV3D_STRIDES, CONV3D_N_BLOCKS
 
 
 class QCHead(nn.Module):
@@ -71,7 +71,7 @@ class EncoderQC(nn.Module):
             print("Checkpoint not found, using random init")
 
         embed_dim = self.backbone.eva.embed_dim
-        self.qc_head = QCHead(in_features=embed_dim)
+        self.qc_head = QCHead(in_features=embed_dim * 2)
 
         if freeze_encoder:
             for p in self.backbone.parameters():
@@ -91,7 +91,48 @@ class EncoderQC(nn.Module):
         B, C, W, H, D = x.shape
         x = x.flatten(2).transpose(1, 2)
         x, _ = self.backbone.eva(x)
-        x = x.mean(dim=1)
+        x = torch.cat([x.mean(dim=1), x.max(dim=1).values], dim=-1)
+        logits = self.qc_head(x)
+        return logits
+
+    def predict_proba(self, x: torch.Tensor) -> torch.Tensor:
+        self.eval()
+        with torch.no_grad():
+            logits = self.forward(x)
+            probs = torch.softmax(logits, dim=-1)
+        return probs
+
+
+class Conv3DQC(nn.Module):
+    """
+    Fully trainable 3D convolutional encoder for QC classification.
+    Uses ResidualEncoder (InstanceNorm + LeakyReLU residual blocks)
+    from dynamic_network_architectures. No pretrained checkpoint needed.
+    """
+    def __init__(self):
+        super().__init__()
+        from dynamic_network_architectures.building_blocks.residual_encoders import ResidualEncoder
+
+        self.encoder = ResidualEncoder(
+            input_channels=1,
+            n_stages=CONV3D_N_STAGES,
+            features_per_stage=CONV3D_FEATURES,
+            conv_op=nn.Conv3d,
+            kernel_sizes=CONV3D_KERNEL_SIZES,
+            strides=CONV3D_STRIDES,
+            n_blocks_per_stage=CONV3D_N_BLOCKS,
+            conv_bias=True,
+            norm_op=nn.InstanceNorm3d,
+            norm_op_kwargs={"eps": 1e-5, "affine": True},
+            nonlin=nn.LeakyReLU,
+            nonlin_kwargs={"inplace": True},
+            return_skips=False,
+        )
+        self.qc_head = QCHead(in_features=CONV3D_FEATURES[-1])
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.encoder(x)
+        x = x.mean(dim=tuple(range(2, x.dim())))
         logits = self.qc_head(x)
         return logits
 
