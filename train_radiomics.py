@@ -4,8 +4,8 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from config import CACHE_DIR, CHECKPOINT_DIR, QC_LABELS
-from models.radiomics_model import RadiomicsXGBoost, parse_view
+from config import CACHE_DIR, CHECKPOINT_DIR, QC_LABELS, CAL_SPLIT, RANDOM_SEED, USE_CALIBRATION
+from models.radiomics_model import RadiomicsXGBoost, parse_view, _stratified_view_split
 
 
 def load_cache(cache_dir: Path):
@@ -57,13 +57,22 @@ def train(args):
     print("Organising by view...")
     view_data = build_view_data(feature_cache, all_keys, labels, file_paths)
 
-    print("\nTraining models...")
+    cal_idx = {}
+    if USE_CALIBRATION and CAL_SPLIT > 0:
+        print(f"\nHolding out {CAL_SPLIT:.0%} per view for calibration...")
+        for view, d in view_data.items():
+            train_i, cal_i = _stratified_view_split(d["y"], CAL_SPLIT, RANDOM_SEED)
+            cal_idx[view] = cal_i
+            print(f"  [{view}] {len(train_i)} train + {len(cal_i)} cal")
+
+    print("\nTraining models (with hyperparameter search + class weights + calibration)...")
     model = RadiomicsXGBoost()
     model.fit(
         view_paths_dict={v: d["paths"] for v, d in view_data.items()},
         view_matrices={v: d["X"] for v, d in view_data.items()},
         view_feature_names={v: d["feature_names"] for v, d in view_data.items()},
         view_labels={v: d["y"] for v, d in view_data.items()},
+        cal_idx=cal_idx if USE_CALIBRATION else None,
     )
 
     save_dir = Path(args.out_dir)
@@ -77,6 +86,12 @@ def train(args):
     train_preds = model.predict(file_paths)
     acc = (train_preds == labels).mean()
     print(f"\nTrain accuracy: {acc:.4f}")
+
+    per_label = []
+    for j, lbl in enumerate(QC_LABELS):
+        la = (train_preds[:, j] == labels[:, j]).mean()
+        per_label.append(f"{lbl}={la:.4f}")
+    print(f"Per-label: {', '.join(per_label)}")
 
 
 if __name__ == "__main__":

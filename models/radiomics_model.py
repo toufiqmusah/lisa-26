@@ -6,8 +6,22 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import xgboost as xgb
 from sklearn.feature_selection import VarianceThreshold
+from sklearn.model_selection import StratifiedShuffleSplit, RandomizedSearchCV
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.utils.class_weight import compute_class_weight
 
-from config import QC_LABELS, N_QC_CLASSES, XGB_PARAMS
+from config import (
+    QC_LABELS,
+    N_QC_CLASSES,
+    XGB_PARAMS,
+    XGB_SEARCH_N_ITER,
+    XGB_SEARCH_CV,
+    XGB_SEARCH_PARAMS,
+    USE_CLASS_WEIGHTS,
+    USE_CALIBRATION,
+    USE_ORDINAL,
+    RANDOM_SEED,
+)
 
 
 VIEW_PATTERN = re.compile(r".*_([a-z]+)\.nii\.gz$")
@@ -101,11 +115,6 @@ def build_radiomics_matrix(
 
 
 class FeatureSelector:
-    """Select features by dropping low-variance then high-correlation ones.
-
-    Artefacts saved alongside models so inference uses the exact same features.
-    """
-
     def __init__(self, var_threshold: float = 0.0, corr_threshold: float = 0.95):
         self.var_threshold = var_threshold
         self.corr_threshold = corr_threshold
@@ -144,19 +153,149 @@ class FeatureSelector:
         return X[:, kept], [feature_names[i] for i in kept]
 
 
+def _stratified_view_split(view_y: np.ndarray, test_size: float, seed: int):
+    """Stratified split for multi-label data using label sum as proxy."""
+    strat = view_y.sum(axis=1)
+    sss = StratifiedShuffleSplit(n_splits=1, test_size=test_size, random_state=seed)
+    return next(sss.split(view_y, strat))
+
+
+def _build_xgb(ordinal: bool, n_classes: int, **params) -> xgb.XGBModel:
+    base = dict(params)
+    if ordinal:
+        return xgb.XGBRegressor(
+            **{k: v for k, v in base.items() if k not in ("eval_metric", "random_state")},
+            random_state=base.get("random_state", RANDOM_SEED),
+        )
+    return xgb.XGBClassifier(
+        **base,
+        objective="multi:softprob",
+        num_class=n_classes,
+    )
+
+
+def _select_objective(y: np.ndarray, ordinal: bool):
+    """Return the correct objective and num_class for the given labels."""
+    unique = np.unique(y)
+    n = len(unique)
+    if n < 2:
+        return None, None, 0
+    if ordinal:
+        return "reg:squarederror", None, 0
+    if n == 2:
+        return "binary:logistic", None, 0
+    return "multi:softprob", N_QC_CLASSES, n
+
+
 class RadiomicsXGBoost:
     """
     Multi-label XGBoost on PyRadiomics features.
 
-    Trains one model per view (axi, cor, sag) with per-view feature selection.
-    Saves all artefacts (models + feature selectors) for reproducible inference.
+    Per-view feature selection + per-label hyperparameter search +
+    class weighting + probability calibration.
     """
 
     def __init__(self, params: Optional[dict] = None):
         self.params = params or XGB_PARAMS
-        self.models: Dict[str, Dict[str, xgb.XGBClassifier]] = {}
+        self.models: Dict[str, Dict[str, xgb.XGBModel]] = {}
+        self.calibrators: Dict[str, Dict[str, CalibratedClassifierCV]] = {}
         self.selectors: Dict[str, FeatureSelector] = {}
         self.selected_features: Dict[str, List[str]] = {}
+        self.label_meta: Dict[str, Dict[str, dict]] = {}
+
+    def _compute_sample_weight(self, y: np.ndarray) -> np.ndarray:
+        classes = np.unique(y)
+        if len(classes) < 2:
+            return np.ones(len(y))
+        w = compute_class_weight("balanced", classes=classes, y=y)
+        return w[y]
+
+    def _search_and_fit(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        label: str,
+        view: str,
+    ) -> xgb.XGBModel:
+        unique = np.unique(y)
+        n_unique = len(unique)
+
+        if n_unique < 2:
+            print(f"    [{view}/{label}] only 1 class ({unique[0]}), skipping")
+            return None
+
+        sample_weight = self._compute_sample_weight(y) if USE_CLASS_WEIGHTS else None
+        n_per_class = np.bincount(y.astype(int), minlength=N_QC_CLASSES)
+
+        if n_unique == 2:
+            obj = "binary:logistic"
+            num_c = 0
+            y_map = {c: i for i, c in enumerate(sorted(unique))}
+            y_fit = np.array([y_map[v] for v in y])
+        else:
+            obj = "multi:softprob"
+            num_c = N_QC_CLASSES
+            y_fit = y
+
+        base = dict(self.params)
+        base.pop("eval_metric", None)
+        base["random_state"] = RANDOM_SEED
+
+        clf = xgb.XGBClassifier(**base, objective=obj, num_class=num_c)
+
+        min_class_count = n_per_class[n_per_class > 0].min()
+        cv = min(XGB_SEARCH_CV, min_class_count)
+        if cv < 2:
+            print(f"    [{view}/{label}] too few samples per class ({min_class_count}), skipping search")
+            fit_kw = {"sample_weight": sample_weight} if sample_weight is not None else {}
+            clf.fit(X, y_fit, **fit_kw)
+            return clf
+
+        search = RandomizedSearchCV(
+            clf,
+            XGB_SEARCH_PARAMS,
+            n_iter=XGB_SEARCH_N_ITER,
+            cv=cv,
+            scoring="neg_log_loss",
+            n_jobs=1,
+            random_state=RANDOM_SEED,
+            verbose=0,
+        )
+
+        fit_kw = {"sample_weight": sample_weight} if sample_weight is not None else {}
+        search.fit(X, y_fit, **fit_kw)
+
+        best = search.best_estimator_
+        print(f"    [{view}/{label}] best: depth={best.max_depth} lr={best.learning_rate} "
+              f"est={best.n_estimators} subsample={best.subsample} "
+              f"cv_logloss={-search.best_score_:.4f}")
+
+        if sample_weight is not None:
+            best.fit(X, y_fit, sample_weight=sample_weight)
+        else:
+            best.fit(X, y_fit)
+
+        return best
+
+    def _calibrate(
+        self,
+        clf: xgb.XGBModel,
+        X: np.ndarray,
+        y: np.ndarray,
+        label: str,
+        view: str,
+    ) -> xgb.XGBModel:
+        if clf is None:
+            return None
+        unique = np.unique(y)
+        if len(unique) < 2:
+            print(f"    [{view}/{label}] only 1 class in cal set, skipping calibration")
+            return clf
+
+        cal = CalibratedClassifierCV(clf, cv="prefit", method="sigmoid")
+        cal.fit(X, y)
+        print(f"    [{view}/{label}] calibrated")
+        return cal
 
     def fit(
         self,
@@ -164,13 +303,14 @@ class RadiomicsXGBoost:
         view_matrices: Dict[str, np.ndarray],
         view_feature_names: Dict[str, List[str]],
         view_labels: Dict[str, np.ndarray],
+        cal_idx: Optional[Dict[str, np.ndarray]] = None,
     ) -> "RadiomicsXGBoost":
         for view in sorted(view_matrices.keys()):
             X_raw = view_matrices[view]
             feat_names = view_feature_names[view]
             view_y = view_labels[view]
             n = len(view_paths_dict[view])
-            print(f"  [{view}] {n} samples, {X_raw.shape[1]} raw features")
+            print(f"\n  [{view}] {n} samples, {X_raw.shape[1]} raw features")
 
             selector = FeatureSelector(var_threshold=0.0, corr_threshold=0.95)
             selector.fit(X_raw, feat_names)
@@ -182,14 +322,34 @@ class RadiomicsXGBoost:
             print(f"  [{view}] {X.shape[1]} features after selection")
 
             self.models[view] = {}
+            self.calibrators[view] = {}
+            self.label_meta[view] = {}
+
             for j, label in enumerate(QC_LABELS):
-                clf = xgb.XGBClassifier(
-                    **self.params,
-                    objective="multi:softprob",
-                    num_class=N_QC_CLASSES,
-                )
-                clf.fit(X, view_y[:, j])
-                self.models[view][label] = clf
+                y_view = view_y[:, j]
+
+                if cal_idx is not None and USE_CALIBRATION:
+                    train_idx = np.setdiff1d(np.arange(len(y_view)), cal_idx[view])
+                    X_train, y_train = X[train_idx], y_view[train_idx]
+                    X_cal, y_cal = X[cal_idx[view]], y_view[cal_idx[view]]
+                else:
+                    X_train, y_train = X, y_view
+                    X_cal, y_cal = X, y_view
+
+                self.label_meta[view][label] = {
+                    "classes_present": sorted(int(c) for c in np.unique(y_view)),
+                    "n_classes": int(len(np.unique(y_view))),
+                }
+
+                clf = self._search_and_fit(X_train, y_train, label, view)
+
+                if clf is not None and USE_CALIBRATION:
+                    calibrated = self._calibrate(clf, X_cal, y_cal, label, view)
+                    self.models[view][label] = calibrated
+                    self.calibrators[view][label] = calibrated if calibrated is not None else clf
+                else:
+                    self.models[view][label] = clf
+                    self.calibrators[view][label] = clf
 
         return self
 
@@ -208,17 +368,50 @@ class RadiomicsXGBoost:
             mask = [feat_names.index(n) for n in selector.selected_features_]
             X = X_raw[:, mask]
             for j, label in enumerate(QC_LABELS):
-                probs[global_idx[view], j, :] = self.models[view][label].predict_proba(X)
+                clf = self.calibrators[view][label]
+                if clf is None:
+                    probs[global_idx[view], j, 0] = 1.0
+                    continue
+                try:
+                    p = clf.predict_proba(X)
+                except Exception:
+                    probs[global_idx[view], j, 0] = 1.0
+                    continue
+                n_pred = p.shape[1]
+                meta = self.label_meta.get(view, {}).get(label, {})
+                present = meta.get("classes_present", [0, 1, 2])
+                if n_pred == 2:
+                    full = np.zeros((p.shape[0], 3))
+                    c0, c1 = present
+                    full[:, c0] = p[:, 0]
+                    full[:, c1] = p[:, 1]
+                    probs[global_idx[view], j, :] = full
+                elif n_pred == 3:
+                    probs[global_idx[view], j, :] = p
+                else:
+                    probs[global_idx[view], j, 0] = 1.0
         return probs
 
-    def predict_proba(self, file_paths: List[Path]) -> np.ndarray:
+    def _load_feature_cache(self) -> dict:
         from config import CACHE_DIR
+        import joblib
 
-        cache_path = CACHE_DIR / "radiomics" / "val_features_cache.pkl"
-        feat_cache = None
-        if cache_path.exists():
-            import joblib
-            feat_cache = joblib.load(cache_path)
+        cache_dir = CACHE_DIR / "radiomics"
+        combined = {}
+
+        val_path = cache_dir / "val_features_cache.pkl"
+        if val_path.exists():
+            combined.update(joblib.load(val_path))
+
+        train_path = cache_dir / "features_cache.pkl"
+        if train_path.exists():
+            train_cache = joblib.load(train_path)
+            combined.update(train_cache["features"])
+
+        return combined
+
+    def predict_proba(self, file_paths: List[Path]) -> np.ndarray:
+        feat_cache = self._load_feature_cache()
 
         view_paths = {v: [] for v in self.models}
         for p in file_paths:
@@ -262,6 +455,10 @@ class RadiomicsXGBoost:
         for view, selector in self.selectors.items():
             joblib.dump(selector, path / f"selector_{view}.pkl")
 
+        if self.label_meta:
+            with open(path / "label_meta.json", "w") as f:
+                json.dump(self.label_meta, f, indent=2)
+
         with open(path / "selected_features.json", "w") as f:
             json.dump(self.selected_features, f, indent=2)
 
@@ -271,11 +468,14 @@ class RadiomicsXGBoost:
         import joblib
         self.models = {}
         self.selectors = {}
+        self.calibrators = {}
 
         for p in path.glob("xgb_*.pkl"):
             parts = p.stem.split("_")
             _, view, label = parts[0], parts[1], "_".join(parts[2:])
-            self.models.setdefault(view, {})[label] = joblib.load(p)
+            model = joblib.load(p)
+            self.models.setdefault(view, {})[label] = model
+            self.calibrators.setdefault(view, {})[label] = model
 
         for p in path.glob("selector_*.pkl"):
             view = p.stem.split("_", 1)[1]
@@ -285,5 +485,10 @@ class RadiomicsXGBoost:
         if json_path.exists():
             with open(json_path) as f:
                 self.selected_features = json.load(f)
+
+        meta_path = path / "label_meta.json"
+        if meta_path.exists():
+            with open(meta_path) as f:
+                self.label_meta = json.load(f)
 
         print(f"Loaded {sum(len(v) for v in self.models.values())} models from {path}")

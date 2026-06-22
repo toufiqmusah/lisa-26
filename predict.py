@@ -28,6 +28,12 @@ def predict_radiomics(args):
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out_path = OUTPUT_DIR / "LISA_LF_QC_predictions.csv"
     pd.DataFrame(rows).to_csv(out_path, index=False)
+
+    df = pd.DataFrame(rows)
+    for c in QC_LABELS:
+        vc = df[c].value_counts().sort_index()
+        print(f"  {c:15s} {dict(vc)}")
+
     print(f"Saved to {out_path}")
 
 

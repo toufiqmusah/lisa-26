@@ -20,8 +20,9 @@ QC_LABELS = ["Noise", "Zipper", "Positioning", "Banding", "Motion", "Contrast", 
 N_QC_CLASSES = 3
 
 RANDOM_SEED = 42
-TEST_SIZE = 0.15
+TEST_SIZE = 0.2
 N_FOLDS = 5
+CAL_SPLIT = 0.15       # held-out fraction for probability calibration
 
 # --- Radiomics + XGBoost ---
 XGB_PARAMS = {
@@ -36,6 +37,26 @@ XGB_PARAMS = {
     "random_state": RANDOM_SEED,
     "eval_metric": "mlogloss",
 }
+
+# Hyperparameter search
+XGB_SEARCH_N_ITER = 15
+XGB_SEARCH_CV = 3
+XGB_SEARCH_PARAMS = {
+    "n_estimators": [200, 500, 1000],
+    "max_depth": [3, 6, 10],
+    "learning_rate": [0.01, 0.05, 0.1],
+    "subsample": [0.6, 0.8, 1.0],
+    "colsample_bytree": [0.6, 0.8, 1.0],
+    "gamma": [0, 0.1, 0.5],
+    "reg_lambda": [1.0, 5.0, 10.0],
+    "reg_alpha": [0, 0.1, 0.5],
+    "min_child_weight": [1, 3, 5],
+}
+
+# Training refinements
+USE_CLASS_WEIGHTS = True
+USE_CALIBRATION = True
+USE_ORDINAL = False
 
 # --- Encoder QC checkpoint (downloaded from HuggingFace) ---
 ENCODER_CHECKPOINT_URL = "toufiqmusah/LISA-26"
