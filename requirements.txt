@@ -1,0 +1,12 @@
+torch>=2.0
+nibabel
+numpy<2
+pandas
+scipy
+scikit-learn
+xgboost
+joblib
+pyyaml
+tqdm
+huggingface_hub
+opencv-python-headless
