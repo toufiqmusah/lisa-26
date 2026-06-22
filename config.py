@@ -41,7 +41,7 @@ XGB_PARAMS = {
 ENCODER_CHECKPOINT_URL = "toufiqmusah/LISA-26"
 ENCODER_CHECKPOINT_FILENAME = "QC-Encoder/checkpoint_best.pth"
 ENCODER_CHECKPOINT_DIR = CHECKPOINT_DIR / "encoder_qc"
-ENCODER_CHECKPOINT_PATH = ENCODER_CHECKPOINT_DIR / "checkpoint_best.pth"
+ENCODER_CHECKPOINT_PATH = ENCODER_CHECKPOINT_DIR / "QC-Encoder" / "checkpoint_best.pth"
 
 
 def ensure_encoder_checkpoint() -> Path:
@@ -56,6 +56,7 @@ def ensure_encoder_checkpoint() -> Path:
         path = hf_hub_download(
             repo_id=ENCODER_CHECKPOINT_URL,
             filename=ENCODER_CHECKPOINT_FILENAME,
+            repo_type="dataset",
             local_dir=ENCODER_CHECKPOINT_DIR,
         )
         return Path(path)
