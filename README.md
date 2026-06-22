@@ -27,7 +27,7 @@ lisa-26/
 
 ```bash
 # 1. Setup
-git clone --recurse-submodules <repo-url>
+git clone --recurse-submodules https://github.com/toufiqmusah/lisa-26.git
 cd lisa-26
 bash setup.sh
 
