@@ -55,7 +55,7 @@ XGB_SEARCH_PARAMS = {
 
 # Training refinements
 USE_CLASS_WEIGHTS = True
-USE_CALIBRATION = True
+USE_CALIBRATION = False
 USE_ORDINAL = False
 
 # --- Encoder QC checkpoint (downloaded from HuggingFace) ---
@@ -119,6 +119,11 @@ FINETUNE_N_BLOCKS = 4
 FINETUNE_LR = 1e-6
 
 CROP_SIZE = (112, 160, 128)
+
+# --- ReconFeature backbone (frozen conv stage + trainable head) ---
+RECON_FEATURE_DIM = 256   # channels after stage1
+RECON_HEAD_HIDDEN = [512, 256, 128]
+RECON_HEAD_DROPOUT = 0.3
 
 # --- Conv3D backbone (fully trainable residual encoder) ---
 CONV3D_N_STAGES = 4

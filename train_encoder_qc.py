@@ -22,7 +22,7 @@ from config import (
     FINETUNE_LR,
 )
 from data.task1a import QCImageDataset
-from models.encoder_qc import EncoderQC, Conv3DQC
+from models.encoder_qc import EncoderQC, Conv3DQC, ReconFeatureQC
 
 
 def collate_3d(batch):
@@ -66,7 +66,17 @@ def train(args):
     )
     print(f"Train: {n_train}, Val: {n_val}")
 
-    if args.backbone == "conv3d":
+    if args.backbone == "recon_feat":
+        ckpt_path = Path(args.checkpoint) if args.checkpoint else None
+        model = ReconFeatureQC(checkpoint_path=ckpt_path)
+        model.to(device)
+        n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        n_total = sum(p.numel() for p in model.parameters())
+        print(f"ReconFeature QC — trainable: {n_trainable:,} / {n_total:,} total")
+        param_groups = [
+            {"params": [p for p in model.parameters() if p.requires_grad], "lr": QC_HEAD_LR},
+        ]
+    elif args.backbone == "conv3d":
         model = Conv3DQC()
         model.to(device)
         n_total = sum(p.numel() for p in model.parameters())
@@ -137,7 +147,8 @@ def train(args):
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            suffix = "_conv3d" if args.backbone == "conv3d" else ""
+            backbone_suffixes = {"conv3d": "_conv3d", "recon_feat": "_recon_feat"}
+            suffix = backbone_suffixes.get(args.backbone, "")
             torch.save(model.state_dict(), save_dir / f"best{suffix}.pt")
             patience_counter = 0
             print("  (saved)")
@@ -155,10 +166,13 @@ def train(args):
 def predict(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    suffix = "_conv3d" if args.backbone == "conv3d" else ""
+    backbone_suffixes = {"conv3d": "_conv3d", "recon_feat": "_recon_feat"}
+    suffix = backbone_suffixes.get(args.backbone, "")
     ckpt_path = CHECKPOINT_DIR / "encoder_qc" / f"best{suffix}.pt"
 
-    if args.backbone == "conv3d":
+    if args.backbone == "recon_feat":
+        model = ReconFeatureQC()
+    elif args.backbone == "conv3d":
         model = Conv3DQC()
     else:
         enc_ckpt = Path(args.checkpoint) if args.checkpoint else None
@@ -191,8 +205,8 @@ def predict(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["train", "predict"])
-    parser.add_argument("--backbone", choices=["primus", "conv3d"], default="primus",
-                        help="primus=frozen EVA+head (needs checkpoint), conv3d=fully trainable 3D ConvNet")
+    parser.add_argument("--backbone", choices=["primus", "conv3d", "recon_feat"], default="primus",
+                        help="primus=frozen EVA+head, conv3d=fully trainable 3D ConvNet, recon_feat=frozen conv stage+head")
     parser.add_argument("--checkpoint", default=None, help="Path to Task 2 PrimusV3S checkpoint (primus only)")
     parser.add_argument("--gpu", type=int, default=0)
     args = parser.parse_args()
