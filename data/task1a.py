@@ -5,6 +5,7 @@ from typing import Optional, Tuple
 import numpy as np
 import nibabel as nib
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 from scipy.ndimage import zoom
@@ -17,9 +18,9 @@ def resize_volume(volume: np.ndarray, target_shape: Tuple[int, ...]) -> np.ndarr
     return zoom(volume, factors, order=1).astype(np.float32)
 
 
-class RandomFlip3D:
+class RandomFlip3D(nn.Module):
     """Randomly flip along the last two (in-plane) dimensions."""
-    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         if random.random() < 0.5:
             x = x.flip(-1)
         if random.random() < 0.5:
@@ -27,13 +28,14 @@ class RandomFlip3D:
         return x
 
 
-class RandomIntensityAug:
+class RandomIntensityAug(nn.Module):
     """Random intensity shift and scale."""
     def __init__(self, shift=0.1, scale=0.1):
+        super().__init__()
         self.shift = shift
         self.scale = scale
 
-    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         if random.random() < 0.5:
             x = x + random.uniform(-self.shift, self.shift)
         if random.random() < 0.5:
