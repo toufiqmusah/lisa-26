@@ -5,6 +5,7 @@ import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader, random_split
 import numpy as np
+from tqdm import tqdm
 
 from config import (
     DATA_ROOT,
@@ -20,8 +21,10 @@ from config import (
     TEST_SIZE,
     FINETUNE_N_BLOCKS,
     FINETUNE_LR,
+    RECON_FINETUNE_STAGES,
+    RECON_FINETUNE_LR,
 )
-from data.task1a import QCImageDataset
+from data.task1a import QCImageDataset, get_train_transform
 from models.encoder_qc import EncoderQC, Conv3DQC, ReconFeatureQC
 
 
@@ -42,13 +45,27 @@ def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
-    full_dataset = QCImageDataset(root=DATA_ROOT, split="train")
+    num_epochs = args.num_epochs if args.num_epochs else QC_HEAD_EPOCHS
+    patience = args.patience if args.patience else QC_HEAD_PATIENCE
+
+    full_dataset = QCImageDataset(root=DATA_ROOT, split="train", transform=get_train_transform())
+    if full_dataset.df is None:
+        raise FileNotFoundError(
+            f"Labels file not found at {DATA_ROOT}/train/labels.csv. "
+            "Set LISA_DATA_ROOT or place data at the expected location."
+        )
     n_val = int(len(full_dataset) * TEST_SIZE)
     n_train = len(full_dataset) - n_val
     train_ds, val_ds = random_split(full_dataset, [n_train, n_val])
 
     # Per-label class weights (inverse frequency, clipped)
-    label_arr = np.array([full_dataset[i][1] for i in range(len(full_dataset))])
+    labels_list = [full_dataset[i][1] for i in range(len(full_dataset))]
+    label_arr = np.array(labels_list)
+    if label_arr.ndim != 2:
+        raise ValueError(
+            f"Expected 2D label array, got {label_arr.ndim}D with shape {label_arr.shape}. "
+            "Check that labels.csv contains all QC_LABELS columns."
+        )
     criteria = []
     for i in range(len(QC_LABELS)):
         counts = np.bincount(label_arr[:, i].astype(int), minlength=N_QC_CLASSES)
@@ -68,14 +85,27 @@ def train(args):
 
     if args.backbone == "recon_feat":
         ckpt_path = Path(args.checkpoint) if args.checkpoint else None
-        model = ReconFeatureQC(checkpoint_path=ckpt_path)
+        finetune_stages = args.finetune_stages if args.finetune_stages is not None else RECON_FINETUNE_STAGES
+        model = ReconFeatureQC(checkpoint_path=ckpt_path, finetune_stages=finetune_stages)
         model.to(device)
         n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
         n_total = sum(p.numel() for p in model.parameters())
         print(f"ReconFeature QC — trainable: {n_trainable:,} / {n_total:,} total")
+        # Separate LR groups: head at QC_HEAD_LR, unfrozen stages at RECON_FINETUNE_LR
+        head_params = []
+        stage_params = []
+        for name, p in model.named_parameters():
+            if not p.requires_grad:
+                continue
+            if "net" in name or "heads" in name:
+                head_params.append(p)
+            else:
+                stage_params.append(p)
         param_groups = [
-            {"params": [p for p in model.parameters() if p.requires_grad], "lr": QC_HEAD_LR},
+            {"params": head_params, "lr": QC_HEAD_LR},
         ]
+        if stage_params:
+            param_groups.append({"params": stage_params, "lr": RECON_FINETUNE_LR})
     elif args.backbone == "conv3d":
         model = Conv3DQC()
         model.to(device)
@@ -106,22 +136,26 @@ def train(args):
                 "lr": FINETUNE_LR,
             })
 
+    param_lrs = {f"group_{i}": g["lr"] for i, g in enumerate(param_groups)}
     optimizer = optim.AdamW(
         param_groups,
         lr=QC_HEAD_LR,
         weight_decay=QC_HEAD_WEIGHT_DECAY,
     )
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=QC_HEAD_EPOCHS)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", factor=0.5, patience=5, min_lr=1e-7,
+    )
 
     best_val_loss = float("inf")
     patience_counter = 0
     save_dir = CHECKPOINT_DIR / "encoder_qc"
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    for epoch in range(1, QC_HEAD_EPOCHS + 1):
+    for epoch in range(1, num_epochs + 1):
         model.train()
         train_loss = 0.0
-        for images, labels in train_loader:
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch:3d}/{num_epochs} [train]", leave=False)
+        for images, labels in pbar:
             images, labels = images.to(device), labels.to(device)
             logits = model(images)
             loss = sum(criteria[i](logits[:, i], labels[:, i]) for i in range(len(QC_LABELS)))
@@ -129,21 +163,25 @@ def train(args):
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
+            pbar.set_postfix(loss=loss.item())
 
         model.eval()
         val_loss = 0.0
+        pbar = tqdm(val_loader, desc=f"Epoch {epoch:3d}/{num_epochs} [val]", leave=False)
         with torch.no_grad():
-            for images, labels in val_loader:
+            for images, labels in pbar:
                 images, labels = images.to(device), labels.to(device)
                 logits = model(images)
                 loss = sum(criteria[i](logits[:, i], labels[:, i]) for i in range(len(QC_LABELS)))
                 val_loss += loss.item()
+                pbar.set_postfix(loss=loss.item())
 
         train_loss /= len(train_loader)
         val_loss /= len(val_loader)
-        scheduler.step()
+        scheduler.step(val_loss)
 
-        print(f"Epoch {epoch:3d}/{QC_HEAD_EPOCHS}  train_loss={train_loss:.4f}  val_loss={val_loss:.4f}", end="")
+        current_lrs = [f"{g['lr']:.2e}" for g in optimizer.param_groups]
+        msg = f"Epoch {epoch:3d}/{num_epochs}  train_loss={train_loss:.4f}  val_loss={val_loss:.4f}  lr={current_lrs}"
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -151,12 +189,12 @@ def train(args):
             suffix = backbone_suffixes.get(args.backbone, "")
             torch.save(model.state_dict(), save_dir / f"best{suffix}.pt")
             patience_counter = 0
-            print("  (saved)")
+            print(f"{msg}  (saved)")
         else:
             patience_counter += 1
-            print("")
+            print(msg)
 
-        if patience_counter >= QC_HEAD_PATIENCE:
+        if patience_counter >= patience:
             print(f"Early stopping at epoch {epoch}")
             break
 
@@ -191,7 +229,7 @@ def predict(args):
 
     rows = []
     with torch.no_grad():
-        for i, images in enumerate(loader):
+        for i, images in enumerate(tqdm(loader, desc="Predicting")):
             images = images.to(device)
             logits = model(images)
             preds = logits.argmax(dim=-1).squeeze(0).cpu().numpy().tolist()
@@ -207,8 +245,14 @@ if __name__ == "__main__":
     parser.add_argument("mode", choices=["train", "predict"])
     parser.add_argument("--backbone", choices=["primus", "conv3d", "recon_feat"], default="primus",
                         help="primus=frozen EVA+head, conv3d=fully trainable 3D ConvNet, recon_feat=frozen conv stage+head")
-    parser.add_argument("--checkpoint", default=None, help="Path to Task 2 PrimusV3S checkpoint (primus only)")
+    parser.add_argument("--checkpoint", default=None, help="Path to Task 2 PrimusV3S checkpoint")
     parser.add_argument("--gpu", type=int, default=0)
+    parser.add_argument("--num_epochs", type=int, default=None,
+                        help="Override QC_HEAD_EPOCHS (default: %(default)s)")
+    parser.add_argument("--patience", type=int, default=None,
+                        help="Override QC_HEAD_PATIENCE (default: %(default)s)")
+    parser.add_argument("--finetune_stages", type=int, default=None,
+                        help="Unfreeze last N conv stages for recon_feat (default: config RECON_FINETUNE_STAGES)")
     args = parser.parse_args()
 
     torch.cuda.set_device(args.gpu)

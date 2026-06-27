@@ -257,7 +257,7 @@ class RadiomicsXGBoost:
             n_iter=XGB_SEARCH_N_ITER,
             cv=cv,
             scoring="neg_log_loss",
-            n_jobs=1,
+            n_jobs=3,
             random_state=RANDOM_SEED,
             verbose=0,
         )

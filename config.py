@@ -39,8 +39,8 @@ XGB_PARAMS = {
 }
 
 # Hyperparameter search
-XGB_SEARCH_N_ITER = 15
-XGB_SEARCH_CV = 3
+XGB_SEARCH_N_ITER = 10
+XGB_SEARCH_CV = 2
 XGB_SEARCH_PARAMS = {
     "n_estimators": [200, 500, 1000],
     "max_depth": [3, 6, 10],
@@ -112,7 +112,7 @@ QC_HEAD_LR = 3e-4
 QC_HEAD_WEIGHT_DECAY = 1e-5
 QC_HEAD_BATCH_SIZE = 2
 QC_HEAD_EPOCHS = 50
-QC_HEAD_PATIENCE = 12
+QC_HEAD_PATIENCE = 15
 
 # Finetune: unfreeze last N encoder blocks with separate LR
 FINETUNE_N_BLOCKS = 4
@@ -124,6 +124,8 @@ CROP_SIZE = (112, 160, 128)
 RECON_FEATURE_DIM = 256   # channels after stage1
 RECON_HEAD_HIDDEN = [512, 256, 128]
 RECON_HEAD_DROPOUT = 0.3
+RECON_FINETUNE_STAGES = 1  # unfreeze last N conv stages (stem + stage0 + stage1 available)
+RECON_FINETUNE_LR = 3e-5
 
 # --- Conv3D backbone (fully trainable residual encoder) ---
 CONV3D_N_STAGES = 4

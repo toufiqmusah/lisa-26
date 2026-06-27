@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from config import CACHE_DIR, CHECKPOINT_DIR, QC_LABELS, RANDOM_SEED
+from config import CACHE_DIR, CHECKPOINT_DIR, QC_LABELS
 from models.radiomics_model import RadiomicsXGBoost, parse_view
 
 
@@ -74,16 +74,6 @@ def train(args):
     with open(selected_path, "w") as f:
         yaml.dump(model.selected_features, f, default_flow_style=False)
     print(f"Selected features saved to {selected_path}")
-
-    train_preds = model.predict(file_paths)
-    acc = (train_preds == labels).mean()
-    print(f"\nTrain accuracy: {acc:.4f}")
-
-    per_label = []
-    for j, lbl in enumerate(QC_LABELS):
-        la = (train_preds[:, j] == labels[:, j]).mean()
-        per_label.append(f"{lbl}={la:.4f}")
-    print(f"Per-label: {', '.join(per_label)}")
 
 
 if __name__ == "__main__":

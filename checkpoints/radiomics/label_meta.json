@@ -1,0 +1,176 @@
+{
+  "axi": {
+    "Noise": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    },
+    "Zipper": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    },
+    "Positioning": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    },
+    "Banding": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    },
+    "Motion": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    },
+    "Contrast": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    },
+    "Distortion": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    }
+  },
+  "cor": {
+    "Noise": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    },
+    "Zipper": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    },
+    "Positioning": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    },
+    "Banding": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    },
+    "Motion": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    },
+    "Contrast": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    },
+    "Distortion": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    }
+  },
+  "sag": {
+    "Noise": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    },
+    "Zipper": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    },
+    "Positioning": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    },
+    "Banding": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    },
+    "Motion": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    },
+    "Contrast": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    },
+    "Distortion": {
+      "classes_present": [
+        0,
+        1,
+        2
+      ],
+      "n_classes": 3
+    }
+  }
+}

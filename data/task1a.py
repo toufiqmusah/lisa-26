@@ -1,9 +1,11 @@
+import random
 from pathlib import Path
 from typing import Optional, Tuple
 
 import numpy as np
 import nibabel as nib
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 from scipy.ndimage import zoom
 
@@ -13,6 +15,37 @@ from config import DATA_ROOT, QC_LABELS, CROP_SIZE
 def resize_volume(volume: np.ndarray, target_shape: Tuple[int, ...]) -> np.ndarray:
     factors = [t / s for t, s in zip(target_shape, volume.shape)]
     return zoom(volume, factors, order=1).astype(np.float32)
+
+
+class RandomFlip3D:
+    """Randomly flip along the last two (in-plane) dimensions."""
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        if random.random() < 0.5:
+            x = x.flip(-1)
+        if random.random() < 0.5:
+            x = x.flip(-2)
+        return x
+
+
+class RandomIntensityAug:
+    """Random intensity shift and scale."""
+    def __init__(self, shift=0.1, scale=0.1):
+        self.shift = shift
+        self.scale = scale
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        if random.random() < 0.5:
+            x = x + random.uniform(-self.shift, self.shift)
+        if random.random() < 0.5:
+            x = x * random.uniform(1.0 - self.scale, 1.0 + self.scale)
+        return x
+
+
+def get_train_transform():
+    return torch.nn.Sequential(
+        RandomFlip3D(),
+        RandomIntensityAug(),
+    )
 
 
 class QCImageDataset(Dataset):

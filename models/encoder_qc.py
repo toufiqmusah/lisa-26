@@ -153,7 +153,7 @@ class ReconFeatureQC(nn.Module):
     Global average pool gives a 256-vector. A 3-layer head (256->512->256->128)
     is the only trainable component (~200K params).
     """
-    def __init__(self, checkpoint_path: Optional[Path] = None):
+    def __init__(self, checkpoint_path: Optional[Path] = None, finetune_stages: int = 0):
         super().__init__()
         from dynamic_network_architectures.architectures.primus import PrimusV3S
 
@@ -183,6 +183,13 @@ class ReconFeatureQC(nn.Module):
 
         for p in self.backbone.parameters():
             p.requires_grad_(False)
+
+        if finetune_stages > 0:
+            stages = [self.backbone.down_projection.stem, *self.backbone.down_projection.stages]
+            for s in stages[-finetune_stages:]:
+                for p in s.parameters():
+                    p.requires_grad_(True)
+            print(f"Unfroze last {finetune_stages} conv stage(s)")
 
         h = RECON_HEAD_HIDDEN
         self.net = nn.Sequential(
