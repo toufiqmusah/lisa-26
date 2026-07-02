@@ -30,7 +30,7 @@ from config import (
     DINOV3_MAX_EPOCHS,
     DINOV3_PATIENCE,
     DINOV3_WARMUP_EPOCHS,
-    DINOV3_CHUNK_SIZE,
+    DINOV3_SLICE_STRIDE,
     DINOV3_BATCH_SIZE,
 )
 from data.task1a import QCImageDataset
@@ -95,6 +95,7 @@ def train(args):
         num_vision_blocks=DINOV3_NUM_VISION_BLOCKS,
         use_patch_concat=DINOV3_USE_PATCH_CONCAT,
         input_size=DINOV3_INPUT_SIZE,
+        slice_stride=DINOV3_SLICE_STRIDE,
         hf_token=args.hf_token,
     )
     model.to(device)
@@ -223,6 +224,7 @@ def predict(args):
         lora_alpha=DINOV3_LORA_ALPHA,
         num_vision_blocks=DINOV3_NUM_VISION_BLOCKS,
         use_patch_concat=DINOV3_USE_PATCH_CONCAT,
+        slice_stride=DINOV3_SLICE_STRIDE,
         hf_token=args.hf_token,
     )
 

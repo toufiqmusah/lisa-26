@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from transformers import AutoModel
 from peft import LoraConfig, get_peft_model
 
-from config import QC_LABELS, N_QC_CLASSES, DINOV3_MODEL_NAME, DINOV3_INPUT_SIZE, DINOV3_LORA_RANK, DINOV3_LORA_ALPHA, DINOV3_NUM_VISION_BLOCKS, DINOV3_USE_PATCH_CONCAT
+from config import QC_LABELS, N_QC_CLASSES, DINOV3_MODEL_NAME, DINOV3_INPUT_SIZE, DINOV3_LORA_RANK, DINOV3_LORA_ALPHA, DINOV3_NUM_VISION_BLOCKS, DINOV3_USE_PATCH_CONCAT, DINOV3_SLICE_STRIDE
 
 IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406])
 IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225])
@@ -71,6 +71,7 @@ class DINOv3QC(nn.Module):
         num_vision_blocks=DINOV3_NUM_VISION_BLOCKS,
         use_patch_concat=DINOV3_USE_PATCH_CONCAT,
         input_size=DINOV3_INPUT_SIZE,
+        slice_stride=DINOV3_SLICE_STRIDE,
         hf_token=None,
     ):
         super().__init__()
@@ -79,6 +80,7 @@ class DINOv3QC(nn.Module):
         self.use_patch_concat = use_patch_concat
         self.num_labels = num_labels
         self.num_classes = num_classes
+        self.slice_stride = slice_stride
 
         model_kwargs = {}
         if hf_token:
@@ -143,14 +145,7 @@ class DINOv3QC(nn.Module):
                 continue
 
             slices = slices.to(device)
-            chunk_size = min(8, slices.shape[0])
-            slice_embeddings = []
-            for i in range(0, slices.shape[0], chunk_size):
-                chunk = slices[i:i+chunk_size]
-                emb = self._encode_slices(chunk)
-                slice_embeddings.append(emb)
-
-            slice_embeddings = torch.cat(slice_embeddings, dim=0)
+            slice_embeddings = self._encode_slices(slices)
             vol_embedding, attn = self.slice_pool(slice_embeddings.unsqueeze(0))
             vol_embedding = vol_embedding.squeeze(0)
 
@@ -167,7 +162,7 @@ class DINOv3QC(nn.Module):
         n_slices = vol_sq.shape[-1]
 
         slices_list = []
-        for i in range(n_slices):
+        for i in range(0, n_slices, self.slice_stride):
             s = vol_sq[..., i]
             s = torch.clamp(s, -3, 3)
             s = (s + 3) / 6
