@@ -95,7 +95,7 @@ class DINOv3QC(nn.Module):
         lora_config = LoraConfig(
             r=lora_rank,
             lora_alpha=lora_alpha,
-            target_modules=["query", "value", "key"],
+            target_modules=["q_proj", "k_proj", "v_proj"],
             lora_dropout=0.0,
             bias="none",
         )
