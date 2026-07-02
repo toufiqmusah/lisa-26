@@ -20,7 +20,7 @@ QC_LABELS = ["Noise", "Zipper", "Positioning", "Banding", "Motion", "Contrast", 
 N_QC_CLASSES = 3
 
 RANDOM_SEED = 42
-TEST_SIZE = 0.2
+TEST_SIZE = 0.0
 N_FOLDS = 5
 CAL_SPLIT = 0.15       # held-out fraction for probability calibration
 

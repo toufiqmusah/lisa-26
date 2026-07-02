@@ -74,14 +74,19 @@ def train(args):
 
     n_val = int(len(full_dataset) * TEST_SIZE)
     n_train = len(full_dataset) - n_val
-    train_ds, val_ds = random_split(full_dataset, [n_train, n_val])
+
+    if n_val > 0:
+        train_ds, val_ds = random_split(full_dataset, [n_train, n_val])
+        val_loader = DataLoader(
+            val_ds, batch_size=DINOV3_BATCH_SIZE, shuffle=False,
+            collate_fn=collate_3d, num_workers=0, pin_memory=True,
+        )
+    else:
+        train_ds = full_dataset
+        val_loader = None
 
     train_loader = DataLoader(
         train_ds, batch_size=DINOV3_BATCH_SIZE, shuffle=True,
-        collate_fn=collate_3d, num_workers=0, pin_memory=True,
-    )
-    val_loader = DataLoader(
-        val_ds, batch_size=DINOV3_BATCH_SIZE, shuffle=False,
         collate_fn=collate_3d, num_workers=0, pin_memory=True,
     )
     print(f"Train: {n_train}, Val: {n_val}")
@@ -140,10 +145,10 @@ def train(args):
 
     scaler = torch.amp.GradScaler() if torch.cuda.is_available() else None
 
-    best_val_loss = float("inf")
-    patience_counter = 0
     save_dir = CHECKPOINT_DIR / "dinov3_qc"
     save_dir.mkdir(parents=True, exist_ok=True)
+
+    save_interval = max(1, num_epochs // 10)
 
     for epoch in range(1, num_epochs + 1):
         model.train()
@@ -152,6 +157,7 @@ def train(args):
         for images, labels in pbar:
             labels = labels.to(device)
 
+            optimizer.zero_grad()
             if scaler:
                 with torch.amp.autocast(device_type="cuda"):
                     logits, _ = model(images)
@@ -162,32 +168,13 @@ def train(args):
             else:
                 logits, _ = model(images)
                 loss = sum(criteria(logits[:, i], labels[:, i]) for i in range(len(QC_LABELS)))
-                optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
-            optimizer.zero_grad()
             train_loss += loss.item()
             pbar.set_postfix(loss=loss.item())
 
-        model.eval()
-        val_loss = 0.0
-        pbar = tqdm(val_loader, desc=f"Epoch {epoch:3d}/{num_epochs} [val]", leave=False)
-        with torch.no_grad():
-            for images, labels in pbar:
-                labels = labels.to(device)
-                if scaler:
-                    with torch.amp.autocast(device_type="cuda"):
-                        logits, _ = model(images)
-                        loss = sum(criteria(logits[:, i], labels[:, i]) for i in range(len(QC_LABELS)))
-                else:
-                    logits, _ = model(images)
-                    loss = sum(criteria(logits[:, i], labels[:, i]) for i in range(len(QC_LABELS)))
-                val_loss += loss.item()
-                pbar.set_postfix(loss=loss.item())
-
         train_loss /= len(train_loader)
-        val_loss /= len(val_loader)
 
         if warmup_epochs > 0 and epoch <= warmup_epochs:
             warmup_scheduler.step()
@@ -195,22 +182,17 @@ def train(args):
             cosine_scheduler.step()
 
         current_lrs = [f"{g['lr']:.2e}" for g in optimizer.param_groups]
-        msg = f"Epoch {epoch:3d}/{num_epochs}  train={train_loss:.4f}  val={val_loss:.4f}  lr={current_lrs}"
+        msg = f"Epoch {epoch:3d}/{num_epochs}  train={train_loss:.4f}  lr={current_lrs}"
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            torch.save(model.state_dict(), save_dir / "best_dinov3_qc.pt")
-            patience_counter = 0
-            print(f"{msg}  (saved)")
+        should_save = (epoch == num_epochs) or (epoch % save_interval == 0)
+        if should_save:
+            torch.save(model.state_dict(), save_dir / f"checkpoint_epoch{epoch:03d}.pt")
+            print(f"{msg}  (saved epoch {epoch})")
         else:
-            patience_counter += 1
             print(msg)
 
-        if patience_counter >= patience:
-            print(f"Early stopping at epoch {epoch}")
-            break
-
-    print(f"Done. Best val loss: {best_val_loss:.4f}")
+    torch.save(model.state_dict(), save_dir / "best_dinov3_qc.pt")
+    print(f"Done. Final checkpoint saved.")
 
 
 def predict(args):
