@@ -1,4 +1,5 @@
 torch>=2.0
+torchvision
 nibabel
 numpy<2
 pandas
@@ -10,3 +11,6 @@ pyyaml
 tqdm
 huggingface_hub
 opencv-python-headless
+transformers>=4.40
+peft>=0.10
+accelerate
