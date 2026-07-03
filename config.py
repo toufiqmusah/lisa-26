@@ -135,7 +135,19 @@ CONV3D_STRIDES = (1, 2, 2, 2)
 CONV3D_N_BLOCKS = (1, 2, 2, 2)
 
 # --- DINOv3 QC ---
-DINOV3_MODEL_NAME = "facebook/dinov3-vits16plus-pretrain-lvd1689m"
+DINOV3_MODELS = {
+    "vits16plus": {
+        "name": "facebook/dinov3-vits16plus-pretrain-lvd1689m",
+        "embed_dim": 384,
+        "num_register_tokens": 4,
+    },
+    "vitb16": {
+        "name": "facebook/dinov3-vitb16-pretrain-lvd1689m",
+        "embed_dim": 768,
+        "num_register_tokens": 4,
+    },
+}
+DINOV3_DEFAULT_MODEL = "vitb16"
 DINOV3_INPUT_SIZE = 224
 DINOV3_LORA_RANK = 8
 DINOV3_LORA_ALPHA = 16
@@ -146,11 +158,13 @@ DINOV3_VISION_LR = 1e-4
 DINOV3_HEAD_LR = 1e-3
 DINOV3_FOCAL_GAMMA = 2.0
 DINOV3_FOCAL_ALPHA = 0.25
-DINOV3_MAX_EPOCHS = 150
-DINOV3_PATIENCE = 30
-DINOV3_WARMUP_EPOCHS = 10
-DINOV3_SLICE_STRIDE = 2  # take every Nth axial slice (1=all 128, 2=64, 4=32)
+DINOV3_MAX_EPOCHS = 250
+DINOV3_PATIENCE = 50
+DINOV3_WARMUP_EPOCHS = 15
+DINOV3_SLICE_STRIDE = 2
 DINOV3_BATCH_SIZE = 1
+DINOV3_VIEW = "all"      # "axial", "coronal", "sagittal", or "all"
+DINOV3_TTA_FLIPS = True   # test-time augmentation: flip along spatial dims
 
 # --- Ensemble ---
 ENSEMBLE_WEIGHTS = {"radiomics": 0.3, "encoder_qc": 0.7}

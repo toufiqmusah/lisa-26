@@ -12,7 +12,7 @@ nohup.out
 
 # Checkpoints downloaded from HF (not tracked)
 checkpoints/encoder_qc/
-
+checkpoints/dinov3_qc
 # HF cache
 .cache/
 

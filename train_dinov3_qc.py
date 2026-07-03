@@ -16,7 +16,8 @@ from config import (
     CHECKPOINT_DIR,
     RANDOM_SEED,
     TEST_SIZE,
-    DINOV3_MODEL_NAME,
+    DINOV3_MODELS,
+    DINOV3_DEFAULT_MODEL,
     DINOV3_INPUT_SIZE,
     DINOV3_LORA_RANK,
     DINOV3_LORA_ALPHA,
@@ -32,6 +33,8 @@ from config import (
     DINOV3_WARMUP_EPOCHS,
     DINOV3_SLICE_STRIDE,
     DINOV3_BATCH_SIZE,
+    DINOV3_VIEW,
+    DINOV3_TTA_FLIPS,
 )
 from data.task1a import QCImageDataset
 from models.dinov3_qc import DINOv3QC
@@ -43,7 +46,18 @@ def collate_3d(batch):
     return list(images), labels
 
 
+def collate_3d_multi(batch):
+    """Multi-view collate: each sample is (list_of_volumes, labels)."""
+    volumes_lists, labels = zip(*batch)
+    labels = torch.stack([torch.from_numpy(lb).long() for lb in labels])
+    return list(volumes_lists), labels
+
+
 def collate_3d_pred(batch):
+    return [b[0] for b in batch]
+
+
+def collate_3d_pred_multi(batch):
     return [b[0] for b in batch]
 
 
@@ -60,15 +74,32 @@ class FocalLoss(nn.Module):
         return focal.mean()
 
 
+def resolve_model_name(model_key):
+    if model_key in DINOV3_MODELS:
+        return DINOV3_MODELS[model_key]["name"]
+    for k, v in DINOV3_MODELS.items():
+        if v["name"] == model_key:
+            return model_key
+    raise ValueError(f"Unknown model: {model_key!r}. Choose from: {list(DINOV3_MODELS.keys())}")
+
+
 def train(args):
     torch.manual_seed(RANDOM_SEED)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
-    num_epochs = args.num_epochs if args.num_epochs else DINOV3_MAX_EPOCHS
-    patience = args.patience if args.patience else DINOV3_PATIENCE
+    num_epochs = args.num_epochs or DINOV3_MAX_EPOCHS
+    patience = args.patience or DINOV3_PATIENCE
+    view = args.view or DINOV3_VIEW
+    model_key = args.model or DINOV3_DEFAULT_MODEL
+    model_name = resolve_model_name(model_key)
 
-    full_dataset = QCImageDataset(root=DATA_ROOT, split="train")
+    is_multiview = view == "all"
+    collate_fn = collate_3d_multi if is_multiview else collate_3d
+    print(f"Model: {model_key} ({model_name})")
+    print(f"View: {view} {'(multi-view: all orientations per subject)' if is_multiview else ''}")
+
+    full_dataset = QCImageDataset(root=DATA_ROOT, split="train", view=view)
     if full_dataset.df is None:
         raise FileNotFoundError(f"Labels file not found at {DATA_ROOT}/train/labels.csv")
 
@@ -79,7 +110,7 @@ def train(args):
         train_ds, val_ds = random_split(full_dataset, [n_train, n_val])
         val_loader = DataLoader(
             val_ds, batch_size=DINOV3_BATCH_SIZE, shuffle=False,
-            collate_fn=collate_3d, num_workers=0, pin_memory=True,
+            collate_fn=collate_fn, num_workers=0, pin_memory=True,
         )
     else:
         train_ds = full_dataset
@@ -87,12 +118,12 @@ def train(args):
 
     train_loader = DataLoader(
         train_ds, batch_size=DINOV3_BATCH_SIZE, shuffle=True,
-        collate_fn=collate_3d, num_workers=0, pin_memory=True,
+        collate_fn=collate_fn, num_workers=0, pin_memory=True,
     )
     print(f"Train: {n_train}, Val: {n_val}")
 
     model = DINOv3QC(
-        model_name=DINOV3_MODEL_NAME,
+        model_name=model_name,
         num_labels=len(QC_LABELS),
         num_classes=N_QC_CLASSES,
         lora_rank=DINOV3_LORA_RANK,
@@ -154,25 +185,49 @@ def train(args):
         model.train()
         train_loss = 0.0
         pbar = tqdm(train_loader, desc=f"Epoch {epoch:3d}/{num_epochs} [train]", leave=False)
+
         for images, labels in pbar:
             labels = labels.to(device)
 
-            optimizer.zero_grad()
-            if scaler:
-                with torch.amp.autocast(device_type="cuda"):
+            if is_multiview:
+                vol_loss = 0.0
+                n_views = 0
+                for vol_list in images:
+                    for vol in vol_list:
+                        optimizer.zero_grad()
+                        if scaler:
+                            with torch.amp.autocast(device_type="cuda"):
+                                logits, _ = model([vol])
+                                loss = sum(criteria(logits[:, i], labels[:, i]) for i in range(len(QC_LABELS)))
+                            scaler.scale(loss).backward()
+                            scaler.step(optimizer)
+                            scaler.update()
+                        else:
+                            logits, _ = model([vol])
+                            loss = sum(criteria(logits[:, i], labels[:, i]) for i in range(len(QC_LABELS)))
+                            loss.backward()
+                            optimizer.step()
+                        vol_loss += loss.item()
+                        n_views += 1
+                batch_loss = vol_loss / max(n_views, 1)
+            else:
+                optimizer.zero_grad()
+                if scaler:
+                    with torch.amp.autocast(device_type="cuda"):
+                        logits, _ = model(images)
+                        loss = sum(criteria(logits[:, i], labels[:, i]) for i in range(len(QC_LABELS)))
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
                     logits, _ = model(images)
                     loss = sum(criteria(logits[:, i], labels[:, i]) for i in range(len(QC_LABELS)))
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                logits, _ = model(images)
-                loss = sum(criteria(logits[:, i], labels[:, i]) for i in range(len(QC_LABELS)))
-                loss.backward()
-                optimizer.step()
+                    loss.backward()
+                    optimizer.step()
+                batch_loss = loss.item()
 
-            train_loss += loss.item()
-            pbar.set_postfix(loss=loss.item())
+            train_loss += batch_loss
+            pbar.set_postfix(loss=batch_loss)
 
         train_loss /= len(train_loader)
 
@@ -195,39 +250,100 @@ def train(args):
     print(f"Done. Final checkpoint saved.")
 
 
-def predict(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+def _load_model(args, model_key, device):
+    model_name = resolve_model_name(model_key)
     model = DINOv3QC(
-        model_name=DINOV3_MODEL_NAME,
+        model_name=model_name,
         num_labels=len(QC_LABELS),
         num_classes=N_QC_CLASSES,
         lora_rank=DINOV3_LORA_RANK,
         lora_alpha=DINOV3_LORA_ALPHA,
         num_vision_blocks=DINOV3_NUM_VISION_BLOCKS,
         use_patch_concat=DINOV3_USE_PATCH_CONCAT,
+        input_size=DINOV3_INPUT_SIZE,
         slice_stride=DINOV3_SLICE_STRIDE,
         hf_token=args.hf_token,
     )
 
     ckpt_path = CHECKPOINT_DIR / "dinov3_qc" / "best_dinov3_qc.pt"
     state = torch.load(ckpt_path, map_location="cpu")
+
+    model_keys = set(model.state_dict().keys())
+    ckpt_keys = set(state.keys())
+    missing = model_keys - ckpt_keys
+    unexpected = ckpt_keys - model_keys
+
+    if missing and unexpected:
+        remapped = {}
+        for k, v in state.items():
+            new_k = k
+            for uk in unexpected:
+                mk = uk.replace("backbone.base_model.model.", "backbone.base_model.model.model.", 1)
+                if mk in missing and uk == k:
+                    new_k = mk
+                    break
+            remapped[new_k] = v
+        state = remapped
+
     model.load_state_dict(state)
     model.to(device)
     model.eval()
-    print(f"Loaded DINOv3 QC checkpoint from {ckpt_path}")
+    print(f"Loaded checkpoint from {ckpt_path}")
+    return model
 
-    dataset = QCImageDataset(root=DATA_ROOT, split="val")
-    loader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=collate_3d_pred)
+
+def _tta_flips(volume):
+    """Generate augmented versions of a volume via flips along spatial dims."""
+    augments = [volume]
+    augments.append(volume.flip(-1))
+    augments.append(volume.flip(-2))
+    augments.append(volume.flip(-1).flip(-2))
+    return augments
+
+
+def predict(args):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    view = args.view or DINOV3_VIEW
+    model_key = args.model or DINOV3_DEFAULT_MODEL
+    use_tta = args.tta if args.tta is not None else DINOV3_TTA_FLIPS
+    is_multiview = view == "all"
+
+    model = _load_model(args, model_key, device)
+
+    dataset = QCImageDataset(root=DATA_ROOT, split="val", view=view)
+    collate_fn = collate_3d_pred_multi if is_multiview and dataset.subjects is not None else collate_3d_pred
+    loader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=collate_fn)
 
     import pandas as pd
+
+    is_val_grouped = is_multiview and dataset.subjects is not None
 
     rows = []
     with torch.no_grad():
         for i, images in enumerate(tqdm(loader, desc="Predicting")):
-            logits, _ = model(images)
-            preds = logits.argmax(dim=-1).squeeze(0).cpu().numpy().tolist()
-            rows.append({"filename": dataset.files[i].name, **{lbl: p for lbl, p in zip(QC_LABELS, preds)}})
+            if is_val_grouped:
+                all_logits = []
+                for vol in images:
+                    if use_tta:
+                        augments = _tta_flips(vol)
+                        aug_logits, _ = model(augments)
+                        all_logits.append(aug_logits.mean(dim=0))
+                    else:
+                        l, _ = model([vol])
+                        all_logits.append(l.squeeze(0))
+                logits = torch.stack(all_logits).mean(dim=0)
+            else:
+                if use_tta:
+                    augments = _tta_flips(images[0])
+                    logits, _ = model(augments)
+                    logits = logits.mean(dim=0)
+                else:
+                    logits, _ = model(images)
+                    logits = logits.squeeze(0)
+
+            preds = logits.argmax(dim=-1).cpu().numpy().tolist()
+            fname = dataset.files[i] if not is_val_grouped else dataset.files[i][0].name
+            rows.append({"filename": Path(fname).name, **{lbl: p for lbl, p in zip(QC_LABELS, preds)}})
 
     out_path = CHECKPOINT_DIR / "dinov3_qc" / "LISA_LF_QC_predictions.csv"
     pd.DataFrame(rows).to_csv(out_path, index=False)
@@ -237,8 +353,11 @@ def predict(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["train", "predict"])
-    parser.add_argument("--num_epochs", type=int, default=None, help="Override DINOV3_MAX_EPOCHS")
-    parser.add_argument("--patience", type=int, default=None, help="Override DINOV3_PATIENCE")
+    parser.add_argument("--model", default=None, help=f"Model variant: {list(DINOV3_MODELS.keys())}")
+    parser.add_argument("--view", default=None, help="View: axial, coronal, sagittal, or all")
+    parser.add_argument("--tta", default=None, type=lambda x: x.lower() in ("1", "true", "yes"), help="TTA flips (default: from config)")
+    parser.add_argument("--num_epochs", type=int, default=None, help="Override max epochs")
+    parser.add_argument("--patience", type=int, default=None, help="Override patience")
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--hf_token", default=None, help="HuggingFace token for gated model access")
     args = parser.parse_args()

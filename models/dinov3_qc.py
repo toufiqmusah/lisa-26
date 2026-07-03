@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from transformers import AutoModel
 from peft import LoraConfig, get_peft_model
 
-from config import QC_LABELS, N_QC_CLASSES, DINOV3_MODEL_NAME, DINOV3_INPUT_SIZE, DINOV3_LORA_RANK, DINOV3_LORA_ALPHA, DINOV3_NUM_VISION_BLOCKS, DINOV3_USE_PATCH_CONCAT, DINOV3_SLICE_STRIDE
+from config import QC_LABELS, N_QC_CLASSES, DINOV3_INPUT_SIZE, DINOV3_LORA_RANK, DINOV3_LORA_ALPHA, DINOV3_NUM_VISION_BLOCKS, DINOV3_USE_PATCH_CONCAT, DINOV3_SLICE_STRIDE
 
 IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406])
 IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225])
@@ -63,7 +63,7 @@ class AttentionPool(nn.Module):
 class DINOv3QC(nn.Module):
     def __init__(
         self,
-        model_name=DINOV3_MODEL_NAME,
+        model_name="facebook/dinov3-vitb16-pretrain-lvd1689m",
         num_labels=7,
         num_classes=3,
         lora_rank=DINOV3_LORA_RANK,
