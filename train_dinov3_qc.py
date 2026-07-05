@@ -29,7 +29,6 @@ from config import (
     DINOV3_FOCAL_GAMMA,
     DINOV3_FOCAL_ALPHA,
     DINOV3_MAX_EPOCHS,
-    DINOV3_PATIENCE,
     DINOV3_WARMUP_EPOCHS,
     DINOV3_SLICE_STRIDE,
     DINOV3_BATCH_SIZE,
@@ -89,7 +88,6 @@ def train(args):
     print(f"Device: {device}")
 
     num_epochs = args.num_epochs or DINOV3_MAX_EPOCHS
-    patience = args.patience or DINOV3_PATIENCE
     view = args.view or DINOV3_VIEW
     model_key = args.model or DINOV3_DEFAULT_MODEL
     model_name = resolve_model_name(model_key)
@@ -357,7 +355,6 @@ if __name__ == "__main__":
     parser.add_argument("--view", default=None, help="View: axial, coronal, sagittal, or all")
     parser.add_argument("--tta", default=None, type=lambda x: x.lower() in ("1", "true", "yes"), help="TTA flips (default: from config)")
     parser.add_argument("--num_epochs", type=int, default=None, help="Override max epochs")
-    parser.add_argument("--patience", type=int, default=None, help="Override patience")
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--hf_token", default=None, help="HuggingFace token for gated model access")
     args = parser.parse_args()

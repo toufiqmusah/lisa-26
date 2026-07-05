@@ -14,3 +14,4 @@ opencv-python-headless
 transformers>=4.40
 peft>=0.10
 accelerate
+torchao

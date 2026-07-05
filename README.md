@@ -36,16 +36,16 @@ Deep learning QC using a frozen DINOv3 backbone (ViT-B or ViT-S+) with LoRA adap
 ```bash
 export LISA_DATA_ROOT=/path/to/DATASET/task1a
 
-# Train (multi-view, ViT-B, 250 epochs)
+# Train (multi-view, ViT-S+, 250 epochs)
 python3 train_dinov3_qc.py train \
-  --model vitb16 \
+  --model vits16plus \
   --view all \
   --num_epochs 250 \
   --hf_token hf_<YOUR_TOKEN>
 
 # Predict (TTA enabled)
 python3 train_dinov3_qc.py predict \
-  --model vitb16 \
+  --model vits16plus \
   --view all \
   --tta true \
   --hf_token hf_<YOUR_TOKEN>
@@ -55,11 +55,10 @@ python3 train_dinov3_qc.py predict \
 **Args:**
 | Arg | Options | Default | Description |
 |---|---|---|---|
-| `--model` | `vitb16`, `vits16plus` | `vitb16` | DINOv3 backbone variant |
+| `--model` | `vits16plus`, `vitb16` | `vits16plus` | DINOv3 backbone variant |
 | `--view` | `axial`, `coronal`, `sagittal`, `all` | `all` | View mode. `all` trains on all 3 orientations per subject |
 | `--tta` | `true`, `false` | `true` | Test-time augmentation (4 flips) |
 | `--num_epochs` | int | 250 | Training epochs |
-| `--patience` | int | 50 | Early stopping patience |
 
 ### Radiomics (F1-micro 0.798)
 
